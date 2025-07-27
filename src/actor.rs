@@ -325,6 +325,37 @@ pub trait Actor: Sized + Send + 'static {
         Self::spawn_with_mailbox(args, mailbox::bounded(DEFAULT_MAILBOX_CAPACITY))
     }
 
+    /// Spawns the actor with a specific actor ID and default bounded mailbox.
+    ///
+    /// This method is useful for creating actors with well-known IDs that can be
+    /// referenced directly without DHT lookups in distributed systems.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the provided ID is unique within the system.
+    /// Using duplicate IDs will cause undefined behavior.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kameo::{Actor, actor::{ActorRef, ActorId}};
+    ///
+    /// #[derive(Actor)]
+    /// struct MyActor;
+    ///
+    /// # tokio_test::block_on(async {
+    /// let well_known_id = ActorId::new(u64::MAX);
+    /// let actor_ref = MyActor::spawn_with_id(well_known_id, MyActor);
+    /// # })
+    /// ```
+    fn spawn_with_id(id: ActorId, args: Self::Args) -> ActorRef<Self> {
+        let (mailbox_tx, mailbox_rx) = mailbox::bounded(DEFAULT_MAILBOX_CAPACITY);
+        let prepared_actor = PreparedActor::new_with_id(id, (mailbox_tx, mailbox_rx));
+        let actor_ref = prepared_actor.actor_ref().clone();
+        prepared_actor.spawn(args);
+        actor_ref
+    }
+
     /// Spawns the actor in a Tokio task with a specific mailbox configuration.
     ///
     /// This function allows you to explicitly specify a mailbox when spawning an actor.

@@ -65,6 +65,39 @@ impl<A: Actor> PreparedActor<A> {
         }
     }
 
+    /// Creates a new prepared actor with a specific ID and mailbox configuration.
+    ///
+    /// This function allows you to explicitly specify both the actor ID and mailbox.
+    /// Use this when you need a well-known, deterministic actor ID for remote routing.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the provided ID is unique within the system.
+    /// Using duplicate IDs will cause undefined behavior.
+    pub fn new_with_id(
+        id: ActorId,
+        (mailbox_tx, mailbox_rx): (MailboxSender<A>, MailboxReceiver<A>),
+    ) -> Self {
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        let links = Links::default();
+        let startup_result = Arc::new(SetOnce::new());
+        let shutdown_result = Arc::new(SetOnce::new());
+        let actor_ref = ActorRef::new_with_id(
+            id,
+            mailbox_tx,
+            abort_handle,
+            links,
+            startup_result,
+            shutdown_result,
+        );
+
+        PreparedActor {
+            actor_ref,
+            mailbox_rx,
+            abort_registration,
+        }
+    }
+
     /// Returns a reference to the [`ActorRef`], which can be used to send messages to the actor.
     ///
     /// The `ActorRef` can be used for interaction before the actor starts processing its event loop.

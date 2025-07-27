@@ -82,6 +82,25 @@ where
         }
     }
 
+    #[inline]
+    pub(crate) fn new_with_id(
+        id: ActorId,
+        mailbox: MailboxSender<A>,
+        abort_handle: AbortHandle,
+        links: Links,
+        startup_result: Arc<SetOnce<Result<(), PanicError>>>,
+        shutdown_result: Arc<SetOnce<Result<(), PanicError>>>,
+    ) -> Self {
+        ActorRef {
+            id,
+            mailbox_sender: mailbox,
+            abort_handle,
+            links,
+            startup_result,
+            shutdown_result,
+        }
+    }
+
     /// Returns the unique identifier of the actor.
     #[inline]
     pub fn id(&self) -> ActorId {
@@ -1483,6 +1502,46 @@ where
             .ok_or(error::RegistryError::SwarmNotBootstrapped)?
             .lookup(name.to_string())
             .await
+    }
+
+    /// Creates a RemoteActorRef for direct peer-to-peer communication without DHT lookup.
+    ///
+    /// This method creates a remote actor reference by directly specifying the actor ID.
+    /// It bypasses the DHT lookup mechanism, making it suitable for scenarios where:
+    /// - The peer is in Kademlia Client mode and cannot provide DHT records
+    /// - Direct peer routing is preferred over DHT discovery
+    /// - You know the exact actor ID on the remote peer
+    ///
+    /// # Arguments
+    ///
+    /// * `actor_id` - The complete actor ID (including peer ID and sequence ID)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use kameo::actor::{RemoteActorRef, ActorId};
+    /// use libp2p::PeerId;
+    ///
+    /// # #[derive(kameo::Actor, kameo::RemoteActor)]
+    /// # struct GatewayActor;
+    /// #
+    /// # tokio_test::block_on(async {
+    /// let peer_id: PeerId = "12D3KooWH4a1PMA1Z7abfRcVnvHSrPHBZvF9JYDXHh6TXmYvpGkV".parse()?;
+    /// let actor_id = ActorId::new_with_peer_id(42, peer_id);
+    /// let gateway_ref = RemoteActorRef::<GatewayActor>::from_actor_id(actor_id);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # });
+    /// ```
+    pub fn from_actor_id(actor_id: ActorId) -> Self
+    where
+        A: remote::RemoteActor + 'static,
+    {
+        let swarm_tx = remote::ActorSwarm::get()
+            .expect("Swarm not bootstrapped")
+            .sender()
+            .clone();
+
+        RemoteActorRef::new(actor_id, swarm_tx)
     }
 
     /// Looks up all actors registered by name across the distributed network.

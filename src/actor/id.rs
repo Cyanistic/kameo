@@ -78,6 +78,27 @@ impl ActorId {
         )
     }
 
+    /// Creates a new `ActorId` for a well-known actor on a specific peer.
+    ///
+    /// This is useful for creating references to remote actors that use deterministic
+    /// IDs, such as gateway actors that always use sequence ID 0.
+    ///
+    /// # Arguments
+    ///
+    /// * `peer_id` - The peer ID of the remote node hosting the actor
+    /// * `well_known_id` - The well-known sequence ID for this actor type
+    ///
+    /// # Returns
+    ///
+    /// A new `ActorId` instance with the specified sequence ID and peer
+    #[cfg(feature = "remote")]
+    pub fn new_well_known(peer_id: libp2p::PeerId, well_known_id: u64) -> Self {
+        ActorId {
+            sequence_id: well_known_id,
+            peer_id: PeerIdKind::PeerId(peer_id),
+        }
+    }
+
     /// Returns the sequential identifier of the actor.
     ///
     /// This `sequence_id` is a unique, locally-generated `u64` assigned to each actor
