@@ -232,7 +232,7 @@ pub fn bootstrap_on(addr: &str) -> Result<PeerId, Box<dyn error::Error>> {
         .with_quic()
         .with_behaviour(|key| {
             let local_peer_id = key.public().to_peer_id();
-            let kameo = Behaviour::new(local_peer_id, messaging::Config::default());
+            let kameo = Behaviour::new(local_peer_id, messaging::Config::default(), None);
             let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
 
             Ok(BootstrapBehaviour { kameo, mdns })
