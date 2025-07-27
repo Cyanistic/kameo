@@ -41,7 +41,7 @@ use std::{
 };
 
 use libp2p::{
-    kad::{self, store::RecordStore, StoreInserts},
+    kad::{self, store::RecordStore, Mode, StoreInserts},
     swarm::{
         behaviour::ConnectionEstablished, ConnectionDenied, ConnectionId, DialError, DialFailure,
         FromSwarm, NetworkBehaviour, NewExternalAddrOfPeer, THandler, THandlerInEvent,
@@ -174,7 +174,7 @@ pub struct Behaviour {
 
 impl Behaviour {
     /// Creates a new registry behaviour.
-    pub fn new(local_peer_id: PeerId) -> Self {
+    pub fn new(local_peer_id: PeerId, mode: Option<Mode>) -> Self {
         let mut config = kad::Config::new(PROTO_NAME);
 
         // Faster lookups for responsive actor discovery
@@ -197,7 +197,7 @@ impl Behaviour {
             kad::store::MemoryStore::new(local_peer_id),
             config,
         );
-        kademlia.set_mode(Some(kad::Mode::Server));
+        kademlia.set_mode(mode);
 
         Behaviour {
             kademlia,

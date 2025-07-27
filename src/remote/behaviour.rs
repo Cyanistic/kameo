@@ -4,6 +4,7 @@ use either::Either;
 use futures::{stream::FuturesUnordered, StreamExt};
 use libp2p::{
     core::{transport::PortUse, Endpoint},
+    kad::Mode,
     swarm::{
         ConnectionClosed, ConnectionDenied, ConnectionHandler, ConnectionHandlerSelect,
         ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent, THandlerOutEvent,
@@ -70,11 +71,15 @@ impl Behaviour {
     /// let config = remote::messaging::Config::default();
     /// let behaviour = remote::Behaviour::new(peer_id, config);
     /// ```
-    pub fn new(local_peer_id: PeerId, messaging_config: messaging::Config) -> Self {
+    pub fn new(
+        local_peer_id: PeerId,
+        messaging_config: messaging::Config,
+        mode: Option<Mode>,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
         let messaging = messaging::Behaviour::new(local_peer_id, messaging_config);
-        let registry = registry::Behaviour::new(local_peer_id);
+        let registry = registry::Behaviour::new(local_peer_id, mode);
 
         Behaviour {
             messaging,
