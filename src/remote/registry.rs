@@ -330,11 +330,26 @@ impl Behaviour {
         // Use the actor name directly as the record key
         let key = kad::RecordKey::new(&name);
         let value = registration.clone().into_bytes();
+        let value_len = value.len();
         let record = kad::Record::new(key, value);
 
+        #[cfg(feature = "tracing")]
+        tracing::info!(
+            "Registering actor '{}' with peer_id {} (value_len={})",
+            name,
+            registration.peer_id,
+            value_len
+        );
+
         let query_id = match self.kademlia.put_record(record, kad::Quorum::One) {
-            Ok(id) => id,
+            Ok(id) => {
+                #[cfg(feature = "tracing")]
+                tracing::info!("Started registration query {} for actor '{}'", id, name);
+                id
+            }
             Err(err) => {
+                #[cfg(feature = "tracing")]
+                tracing::error!("Failed to start registration for actor '{}': {}", name, err);
                 return Err((reply, err));
             }
         };
@@ -359,11 +374,15 @@ impl Behaviour {
         reply: Option<LookupReply>,
     ) -> kad::QueryId {
         let key = kad::RecordKey::new(&name);
+
+        #[cfg(feature = "tracing")]
+        tracing::info!("Looking up actor '{}'", name);
+
         let query_id = self.kademlia.get_record(key);
         self.lookup_queries.insert(
             query_id,
             LookupQuery {
-                name,
+                name: name.clone(),
                 providers_finished: true, // No providers needed anymore
                 metadata_queries: HashSet::new(),
                 queried_providers: HashSet::new(),
@@ -371,6 +390,9 @@ impl Behaviour {
                 reply,
             },
         );
+
+        #[cfg(feature = "tracing")]
+        tracing::info!("Started lookup query {} for actor '{}'", query_id, name);
 
         query_id
     }
@@ -594,9 +616,30 @@ impl Behaviour {
                             record: kad::Record { value, .. },
                             ..
                         })) => {
+                            #[cfg(feature = "tracing")]
+                            tracing::info!(
+                                "Found record for lookup query {} (value_len={})",
+                                id,
+                                value.len()
+                            );
+
                             let result = ActorRegistration::from_bytes(&value)
                                 .map(|registration| registration.into_owned())
                                 .map_err(RegistryError::from);
+
+                            #[cfg(feature = "tracing")]
+                            match &result {
+                                Ok(registration) => {
+                                    tracing::info!("Successfully parsed registration for actor '{}' with peer_id {}", lookup_query.name, registration.peer_id);
+                                }
+                                Err(err) => {
+                                    tracing::error!(
+                                        "Failed to parse registration for actor '{}': {}",
+                                        lookup_query.name,
+                                        err
+                                    );
+                                }
+                            }
 
                             match &lookup_query.reply {
                                 Some(tx) => {
@@ -612,9 +655,17 @@ impl Behaviour {
                             }
                         }
                         // These cases don't provide useful information to the user
-                        Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })
-                        | Err(kad::GetRecordError::NotFound { .. }) => {
-                            // No progress event needed
+                        Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. }) => {
+                            #[cfg(feature = "tracing")]
+                            tracing::info!("Lookup query {} finished with no additional records for actor '{}'", id, lookup_query.name);
+                        }
+                        Err(kad::GetRecordError::NotFound { .. }) => {
+                            #[cfg(feature = "tracing")]
+                            tracing::warn!(
+                                "Lookup query {} found no record for actor '{}'",
+                                id,
+                                lookup_query.name
+                            );
                         }
                         // Error cases are still useful to report
                         Err(kad::GetRecordError::QuorumFailed { quorum, .. }) => {
@@ -658,7 +709,8 @@ impl Behaviour {
                 }
                 // Putting a record has progressed
                 kad::QueryResult::PutRecord(res) => {
-                    let Entry::Occupied(mut registration_query_entry) = self.registration_queries.entry(id)
+                    let Entry::Occupied(mut registration_query_entry) =
+                        self.registration_queries.entry(id)
                     else {
                         #[cfg(feature = "tracing")]
                         tracing::warn!("ignoring PutRecord event for unknown registration query");
@@ -669,6 +721,14 @@ impl Behaviour {
                     match res {
                         Ok(ok) => {
                             let mut registration_query = registration_query_entry.remove();
+
+                            #[cfg(feature = "tracing")]
+                            tracing::info!(
+                                "Successfully registered actor '{}' (query {})",
+                                registration_query.name,
+                                id
+                            );
+
                             match registration_query.reply.take() {
                                 Some(tx) => {
                                     let _ = tx.send(Ok(()));
@@ -677,9 +737,11 @@ impl Behaviour {
                                     // For the new record-based approach, we can create dummy provider result
                                     // since the event structure still expects both results
                                     self.pending_events.push_back(Event::RegisteredActor {
-                                        provider_result: kad::AddProviderResult::Ok(kad::AddProviderOk {
-                                            key: kad::RecordKey::new(&registration_query.name),
-                                        }),
+                                        provider_result: kad::AddProviderResult::Ok(
+                                            kad::AddProviderOk {
+                                                key: kad::RecordKey::new(&registration_query.name),
+                                            },
+                                        ),
                                         provider_query_id,
                                         metadata_result: Ok(ok.clone()),
                                         metadata_query_id: id,
@@ -689,6 +751,15 @@ impl Behaviour {
                         }
                         Err(err) => {
                             let registration_query = registration_query_entry.remove();
+
+                            #[cfg(feature = "tracing")]
+                            tracing::error!(
+                                "Failed to register actor '{}' (query {}): {}",
+                                registration_query.name,
+                                id,
+                                err
+                            );
+
                             match registration_query.reply {
                                 Some(tx) => {
                                     let _ = tx.send(Err(err.clone().into()));
@@ -1148,7 +1219,11 @@ impl<'a> ActorRegistration<'a> {
     /// This is useful when you need to store the registration beyond
     /// the lifetime of the original borrowed data.
     pub fn into_owned(self) -> ActorRegistration<'static> {
-        ActorRegistration::new(self.actor_id, Cow::Owned(self.remote_id.into_owned()), self.peer_id)
+        ActorRegistration::new(
+            self.actor_id,
+            Cow::Owned(self.remote_id.into_owned()),
+            self.peer_id,
+        )
     }
 }
 
