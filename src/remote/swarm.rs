@@ -38,7 +38,7 @@ static ACTOR_SWARM: OnceLock<ActorSwarm> = OnceLock::new();
 /// The `ActorSwarm` is the essential component for enabling distributed actor communication
 /// and message passing across decentralized nodes.
 #[derive(Clone, Debug)]
-pub(crate) struct ActorSwarm {
+pub struct ActorSwarm {
     swarm_tx: SwarmSender,
     local_peer_id: PeerId,
 }
@@ -368,7 +368,7 @@ impl<A: Actor + RemoteActor> Stream for LookupStream<A> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SwarmSender(mpsc::UnboundedSender<SwarmCommand>);
+pub struct SwarmSender(mpsc::UnboundedSender<SwarmCommand>);
 
 impl SwarmSender {
     pub(crate) fn send(&self, cmd: SwarmCommand) {

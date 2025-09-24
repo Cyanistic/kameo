@@ -1452,7 +1452,7 @@ impl<A> RemoteActorRef<A>
 where
     A: Actor + remote::RemoteActor,
 {
-    pub(crate) fn new(id: ActorId, swarm_tx: remote::SwarmSender) -> Self {
+    pub fn new(id: ActorId, swarm_tx: remote::SwarmSender) -> Self {
         RemoteActorRef {
             id,
             swarm_tx,
