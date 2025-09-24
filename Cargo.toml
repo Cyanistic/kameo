@@ -59,6 +59,7 @@ libp2p = { version = "0.56.0", features = [
   "mdns",
   "quic",
   "request-response",
+  "serde",
   "tcp",
   "tokio",
   "yamux",

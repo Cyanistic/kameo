@@ -86,6 +86,7 @@ impl ActorSwarm {
             let Some(ActorRegistration {
                 actor_id,
                 remote_id,
+                ..
             }) = reply_rx.await?
             else {
                 return Ok(None);
@@ -153,7 +154,7 @@ impl ActorSwarm {
         actor_ref: ActorRef<A>,
         name: String,
     ) -> impl Future<Output = Result<(), RegistryError>> {
-        let registration = ActorRegistration::new(actor_ref.id(), Cow::Borrowed(A::REMOTE_ID));
+        let registration = ActorRegistration::new(actor_ref.id(), Cow::Borrowed(A::REMOTE_ID), self.local_peer_id);
 
         let reply_rx = self
             .swarm_tx

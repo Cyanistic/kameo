@@ -327,8 +327,12 @@ impl Behaviour {
         registration: ActorRegistration<'static>,
         reply: Option<RegisterReply>,
     ) -> Result<kad::QueryId, (Option<RegisterReply>, kad::store::Error)> {
+        // Use the actor name directly as the record key
         let key = kad::RecordKey::new(&name);
-        let provider_query_id = match self.kademlia.start_providing(key) {
+        let value = registration.clone().into_bytes();
+        let record = kad::Record::new(key, value);
+
+        let query_id = match self.kademlia.put_record(record, kad::Quorum::One) {
             Ok(id) => id,
             Err(err) => {
                 return Err((reply, err));
@@ -336,17 +340,17 @@ impl Behaviour {
         };
 
         self.registration_queries.insert(
-            provider_query_id,
+            query_id,
             RegistrationQuery {
                 name,
                 registration: Some(registration),
-                put_query_id: None,
+                put_query_id: Some(query_id),
                 provider_result: None,
                 reply,
             },
         );
 
-        Ok(provider_query_id)
+        Ok(query_id)
     }
 
     pub(super) fn lookup_with_reply(
@@ -354,12 +358,13 @@ impl Behaviour {
         name: String,
         reply: Option<LookupReply>,
     ) -> kad::QueryId {
-        let query_id = self.kademlia.get_providers(kad::RecordKey::new(&name));
+        let key = kad::RecordKey::new(&name);
+        let query_id = self.kademlia.get_record(key);
         self.lookup_queries.insert(
             query_id,
             LookupQuery {
                 name,
-                providers_finished: false,
+                providers_finished: true, // No providers needed anymore
                 metadata_queries: HashSet::new(),
                 queried_providers: HashSet::new(),
                 reported_providers: HashSet::new(),
@@ -573,18 +578,16 @@ impl Behaviour {
                     }
                 }
                 kad::QueryResult::RepublishProvider(_) => (false, None),
-                // Getting a metadata record has progressed
+                // Getting a record has progressed
                 kad::QueryResult::GetRecord(res) => {
-                    let Some((provider_query_id, lookup_query)) = self
-                        .lookup_queries
-                        .iter_mut()
-                        .find(|(_, lookup_query)| lookup_query.has_metadata_query(&id))
+                    let Entry::Occupied(mut lookup_query_entry) = self.lookup_queries.entry(id)
                     else {
                         #[cfg(feature = "tracing")]
                         tracing::warn!("ignoring GetRecord event for unknown lookup query");
                         return (false, None);
                     };
-                    let provider_query_id = *provider_query_id;
+                    let lookup_query = lookup_query_entry.get_mut();
+                    let provider_query_id = id;
 
                     match res {
                         Ok(kad::GetRecordOk::FoundRecord(kad::PeerRecord {
@@ -595,34 +598,16 @@ impl Behaviour {
                                 .map(|registration| registration.into_owned())
                                 .map_err(RegistryError::from);
 
-                            // Check if we've already reported this provider to avoid duplicates
-                            let should_emit = if let Ok(ref registration) = result {
-                                if let Some(peer_id) = registration.actor_id.peer_id() {
-                                    if lookup_query.reported_providers.contains(peer_id) {
-                                        false // Already reported this provider
-                                    } else {
-                                        lookup_query.reported_providers.insert(*peer_id);
-                                        true
-                                    }
-                                } else {
-                                    true // No peer_id, emit anyway
+                            match &lookup_query.reply {
+                                Some(tx) => {
+                                    let _ = tx.send(result);
                                 }
-                            } else {
-                                true // Error case, emit anyway
-                            };
-
-                            if should_emit {
-                                match &lookup_query.reply {
-                                    Some(tx) => {
-                                        let _ = tx.send(result);
-                                    }
-                                    None => {
-                                        self.pending_events.push_back(Event::LookupProgressed {
-                                            provider_query_id,
-                                            get_query_id: id,
-                                            result,
-                                        });
-                                    }
+                                None => {
+                                    self.pending_events.push_back(Event::LookupProgressed {
+                                        provider_query_id,
+                                        get_query_id: id,
+                                        result,
+                                    });
                                 }
                             }
                         }
@@ -661,53 +646,40 @@ impl Behaviour {
                     }
 
                     if step.last {
-                        lookup_query.metadata_query_finished(&id);
-                        let last = lookup_query.is_finished();
-
-                        if last {
-                            if lookup_query.reply.is_none() {
-                                self.pending_events
-                                    .push_back(Event::LookupCompleted { provider_query_id });
-                            }
-                            self.lookup_queries.remove(&provider_query_id);
+                        // Direct record lookup is complete
+                        if lookup_query.reply.is_none() {
+                            self.pending_events
+                                .push_back(Event::LookupCompleted { provider_query_id });
                         }
+                        lookup_query_entry.remove();
                     }
 
                     (false, None)
                 }
-                // Putting a metadata record has progressed
+                // Putting a record has progressed
                 kad::QueryResult::PutRecord(res) => {
-                    let Some(provider_query_id) =
-                        self.registration_queries
-                            .iter()
-                            .find_map(|(query_id, reg)| {
-                                if reg.put_query_id == Some(id) {
-                                    Some(*query_id)
-                                } else {
-                                    None
-                                }
-                            })
+                    let Entry::Occupied(mut registration_query_entry) = self.registration_queries.entry(id)
                     else {
                         #[cfg(feature = "tracing")]
                         tracing::warn!("ignoring PutRecord event for unknown registration query");
                         return (false, None);
                     };
+                    let provider_query_id = id;
 
                     match res {
                         Ok(ok) => {
-                            let mut registration_query = self
-                                .registration_queries
-                                .remove(&provider_query_id)
-                                .unwrap();
+                            let mut registration_query = registration_query_entry.remove();
                             match registration_query.reply.take() {
                                 Some(tx) => {
                                     let _ = tx.send(Ok(()));
                                 }
                                 None => {
+                                    // For the new record-based approach, we can create dummy provider result
+                                    // since the event structure still expects both results
                                     self.pending_events.push_back(Event::RegisteredActor {
-                                        provider_result: registration_query
-                                            .provider_result
-                                            .unwrap(),
+                                        provider_result: kad::AddProviderResult::Ok(kad::AddProviderOk {
+                                            key: kad::RecordKey::new(&registration_query.name),
+                                        }),
                                         provider_query_id,
                                         metadata_result: Ok(ok.clone()),
                                         metadata_query_id: id,
@@ -716,11 +688,8 @@ impl Behaviour {
                             }
                         }
                         Err(err) => {
-                            match self
-                                .registration_queries
-                                .remove(&provider_query_id)
-                                .and_then(|q| q.reply)
-                            {
+                            let registration_query = registration_query_entry.remove();
+                            match registration_query.reply {
                                 Some(tx) => {
                                     let _ = tx.send(Err(err.clone().into()));
                                 }
@@ -1099,12 +1068,15 @@ impl LookupQuery {
 /// Contains the actor's unique ID and its remote type identifier,
 /// which together allow remote peers to locate and communicate
 /// with the actor.
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ActorRegistration<'a> {
     /// The unique identifier of the actor.
     pub actor_id: ActorId,
     /// The remote type identifier for the actor.
+    #[serde(borrow)]
     pub remote_id: Cow<'a, str>,
+    /// The peer ID where this actor is located.
+    pub peer_id: PeerId,
 }
 
 impl<'a> ActorRegistration<'a> {
@@ -1114,25 +1086,35 @@ impl<'a> ActorRegistration<'a> {
     ///
     /// * `actor_id` - The unique identifier of the actor
     /// * `remote_id` - The remote type identifier for the actor
-    pub fn new(actor_id: ActorId, remote_id: Cow<'a, str>) -> Self {
+    /// * `peer_id` - The peer ID where this actor is located
+    pub fn new(actor_id: ActorId, remote_id: Cow<'a, str>, peer_id: PeerId) -> Self {
         ActorRegistration {
             actor_id,
             remote_id,
+            peer_id,
         }
     }
 
     /// Serializes the actor registration into bytes for storage in the DHT.
     ///
-    /// The format includes the peer ID length, actor ID bytes, and remote ID string.
+    /// Uses rmp-serde for reliable serialization.
     pub fn into_bytes(self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(1 + 8 + 42 + self.remote_id.len());
-        let actor_id_bytes = self.actor_id.to_bytes();
-        let peer_id_len = (actor_id_bytes.len() - 8) as u8;
-        bytes.extend_from_slice(&peer_id_len.to_le_bytes());
-        bytes.extend_from_slice(&actor_id_bytes);
-        bytes.extend_from_slice(self.remote_id.as_bytes());
-        bytes
+        rmp_serde::to_vec(&self).expect("ActorRegistration should always be serializable")
     }
+
+    // /// Old custom serialization (commented out for reference)
+    // /// The format included peer ID length, actor ID bytes, peer ID bytes, and remote ID string.
+    // pub fn into_bytes_old(self) -> Vec<u8> {
+    //     let actor_id_bytes = self.actor_id.to_bytes();
+    //     let peer_id_bytes = self.peer_id.to_bytes();
+    //     let mut bytes = Vec::with_capacity(1 + actor_id_bytes.len() + peer_id_bytes.len() + self.remote_id.len());
+    //
+    //     bytes.push(peer_id_bytes.len() as u8);
+    //     bytes.extend_from_slice(&actor_id_bytes);
+    //     bytes.extend_from_slice(&peer_id_bytes);
+    //     bytes.extend_from_slice(self.remote_id.as_bytes());
+    //     bytes
+    // }
 
     /// Deserializes an actor registration from bytes retrieved from the DHT.
     ///
@@ -1144,24 +1126,29 @@ impl<'a> ActorRegistration<'a> {
     ///
     /// The deserialized actor registration, or an error if the data is invalid.
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, InvalidActorRegistration> {
-        if bytes.is_empty() {
-            return Err(InvalidActorRegistration::EmptyActorRegistration);
-        }
-
-        let peer_id_bytes_len = u8::from_le_bytes(bytes[..1].try_into().unwrap()) as usize;
-        let actor_id = ActorId::from_bytes(&bytes[1..1 + 8 + peer_id_bytes_len])?;
-        let remote_id = std::str::from_utf8(&bytes[1 + 8 + peer_id_bytes_len..])
-            .map_err(InvalidActorRegistration::InvalidRemoteIDUtf8)?;
-
-        Ok(ActorRegistration::new(actor_id, Cow::Borrowed(remote_id)))
+        rmp_serde::from_slice(bytes).map_err(InvalidActorRegistration::SerdeError)
     }
+
+    // /// Old custom deserialization (commented out for reference)
+    // pub fn from_bytes_old(bytes: &'a [u8]) -> Result<Self, InvalidActorRegistration> {
+    //     if bytes.is_empty() {
+    //         return Err(InvalidActorRegistration::EmptyActorRegistration);
+    //     }
+    //
+    //     let peer_id_bytes_len = u8::from_le_bytes(bytes[..1].try_into().unwrap()) as usize;
+    //     let actor_id = ActorId::from_bytes(&bytes[1..1 + 8 + peer_id_bytes_len])?;
+    //     let remote_id = std::str::from_utf8(&bytes[1 + 8 + peer_id_bytes_len..])
+    //         .map_err(InvalidActorRegistration::InvalidRemoteIDUtf8)?;
+    //
+    //     Ok(ActorRegistration::new(actor_id, Cow::Borrowed(remote_id)))
+    // }
 
     /// Converts a borrowed actor registration into an owned one.
     ///
     /// This is useful when you need to store the registration beyond
     /// the lifetime of the original borrowed data.
     pub fn into_owned(self) -> ActorRegistration<'static> {
-        ActorRegistration::new(self.actor_id, Cow::Owned(self.remote_id.into_owned()))
+        ActorRegistration::new(self.actor_id, Cow::Owned(self.remote_id.into_owned()), self.peer_id)
     }
 }
 
@@ -1174,6 +1161,8 @@ pub enum InvalidActorRegistration {
     ActorId(ActorIdFromBytesError),
     /// The remote ID contains invalid UTF-8.
     InvalidRemoteIDUtf8(str::Utf8Error),
+    /// Serde deserialization error.
+    SerdeError(rmp_serde::decode::Error),
 }
 
 impl From<ActorIdFromBytesError> for InvalidActorRegistration {
@@ -1190,6 +1179,7 @@ impl fmt::Display for InvalidActorRegistration {
             }
             InvalidActorRegistration::ActorId(err) => err.fmt(f),
             InvalidActorRegistration::InvalidRemoteIDUtf8(err) => err.fmt(f),
+            InvalidActorRegistration::SerdeError(err) => err.fmt(f),
         }
     }
 }
