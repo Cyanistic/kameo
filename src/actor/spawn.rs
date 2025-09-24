@@ -17,12 +17,10 @@ use tracing::{error, trace};
 use crate::remote;
 
 use crate::{
-    actor::{kind::ActorBehaviour, Actor, ActorRef, Link, Links, CURRENT_ACTOR_ID},
+    actor::{kind::ActorBehaviour, Actor, ActorId, ActorRef, Link, Links, CURRENT_ACTOR_ID},
     error::{invoke_actor_error_hook, ActorStopReason, PanicError, SendError},
     mailbox::{MailboxReceiver, MailboxSender, Signal},
 };
-
-use super::ActorId;
 
 /// A `PreparedActor` represents an actor that has been initialized and is ready to be either run
 /// in the current task or spawned into a new task.
@@ -51,6 +49,42 @@ impl<A: Actor> PreparedActor<A> {
         let startup_result = Arc::new(SetOnce::new());
         let shutdown_result = Arc::new(SetOnce::new());
         let actor_ref = ActorRef::new(
+            mailbox_tx,
+            abort_handle,
+            links,
+            startup_result,
+            shutdown_result,
+        );
+
+        PreparedActor {
+            actor_ref,
+            mailbox_rx,
+            abort_registration,
+        }
+    }
+
+    /// Creates a new prepared actor with a specific `ActorId` and mailbox configuration.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because the caller must ensure that the provided `ActorId`
+    /// is unique within the actor system. Using duplicate IDs can lead to undefined behavior,
+    /// message routing failures, and other system inconsistencies.
+    ///
+    /// The caller is responsible for:
+    /// - Ensuring the `ActorId` is globally unique
+    /// - Not conflicting with auto-generated IDs from `ActorId::generate()`
+    /// - Understanding the implications of manual ID management
+    pub unsafe fn new_with_id(
+        id: ActorId,
+        (mailbox_tx, mailbox_rx): (MailboxSender<A>, MailboxReceiver<A>),
+    ) -> Self {
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        let links = Links::default();
+        let startup_result = Arc::new(SetOnce::new());
+        let shutdown_result = Arc::new(SetOnce::new());
+        let actor_ref = ActorRef::new_with_id(
+            id,
             mailbox_tx,
             abort_handle,
             links,

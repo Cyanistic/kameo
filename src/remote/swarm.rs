@@ -262,7 +262,7 @@ impl ActorSwarm {
         }
     }
 
-    pub(crate) fn sender(&self) -> &SwarmSender {
+    pub fn sender(&self) -> &SwarmSender {
         &self.swarm_tx
     }
 }

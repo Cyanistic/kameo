@@ -572,4 +572,140 @@ pub trait Actor: Sized + Send + 'static {
     ) -> PreparedActor<Self> {
         PreparedActor::new((mailbox_tx, mailbox_rx))
     }
+
+    /// Spawns an actor with a specific `ActorId`.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because the caller must ensure that the provided `ActorId`
+    /// is unique within the actor system. Using duplicate IDs can lead to undefined behavior,
+    /// message routing failures, and other system inconsistencies.
+    ///
+    /// The caller is responsible for:
+    /// - Ensuring the `ActorId` is globally unique
+    /// - Not conflicting with auto-generated IDs from `ActorId::generate()`
+    /// - Understanding the implications of manual ID management
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kameo::{Actor, actor::ActorId};
+    ///
+    /// #[derive(Actor)]
+    /// struct MyActor;
+    ///
+    /// # tokio_test::block_on(async {
+    /// // SAFETY: We ensure ID 1000 is unique and doesn't conflict with auto-generated IDs
+    /// let actor_ref = unsafe { MyActor::spawn_with_id(MyActor, ActorId::new(1000)) };
+    /// # })
+    /// ```
+    unsafe fn spawn_with_id(args: Self::Args, id: ActorId) -> ActorRef<Self> {
+        Self::spawn_with_id_and_mailbox(args, id, mailbox::bounded(DEFAULT_MAILBOX_CAPACITY))
+    }
+
+    /// Spawns an actor with a specific `ActorId` and mailbox configuration.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because the caller must ensure that the provided `ActorId`
+    /// is unique within the actor system. Using duplicate IDs can lead to undefined behavior,
+    /// message routing failures, and other system inconsistencies.
+    ///
+    /// The caller is responsible for:
+    /// - Ensuring the `ActorId` is globally unique
+    /// - Not conflicting with auto-generated IDs from `ActorId::generate()`
+    /// - Understanding the implications of manual ID management
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kameo::{Actor, actor::ActorId, mailbox};
+    ///
+    /// #[derive(Actor)]
+    /// struct MyActor;
+    ///
+    /// # tokio_test::block_on(async {
+    /// // SAFETY: We ensure ID 1000 is unique and doesn't conflict with auto-generated IDs
+    /// let actor_ref = unsafe {
+    ///     MyActor::spawn_with_id_and_mailbox(MyActor, ActorId::new(1000), mailbox::unbounded())
+    /// };
+    /// # })
+    /// ```
+    unsafe fn spawn_with_id_and_mailbox(
+        args: Self::Args,
+        id: ActorId,
+        (mailbox_tx, mailbox_rx): (MailboxSender<Self>, MailboxReceiver<Self>),
+    ) -> ActorRef<Self> {
+        let prepared_actor = PreparedActor::new_with_id(id, (mailbox_tx, mailbox_rx));
+        let actor_ref = prepared_actor.actor_ref().clone();
+        prepared_actor.spawn(args);
+        actor_ref
+    }
+
+    /// Prepares an actor with a specific `ActorId` for later spawning.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because the caller must ensure that the provided `ActorId`
+    /// is unique within the actor system. Using duplicate IDs can lead to undefined behavior,
+    /// message routing failures, and other system inconsistencies.
+    ///
+    /// The caller is responsible for:
+    /// - Ensuring the `ActorId` is globally unique
+    /// - Not conflicting with auto-generated IDs from `ActorId::generate()`
+    /// - Understanding the implications of manual ID management
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kameo::{Actor, actor::ActorId};
+    ///
+    /// #[derive(Actor)]
+    /// struct MyActor;
+    ///
+    /// # tokio_test::block_on(async {
+    /// // SAFETY: We ensure ID 1000 is unique and doesn't conflict with auto-generated IDs
+    /// let prepared_actor = unsafe { MyActor::prepare_with_id(ActorId::new(1000)) };
+    /// let actor_ref = prepared_actor.spawn(MyActor);
+    /// # })
+    /// ```
+    unsafe fn prepare_with_id(id: ActorId) -> PreparedActor<Self> {
+        Self::prepare_with_id_and_mailbox(id, mailbox::bounded(DEFAULT_MAILBOX_CAPACITY))
+    }
+
+    /// Prepares an actor with a specific `ActorId` and mailbox configuration.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because the caller must ensure that the provided `ActorId`
+    /// is unique within the actor system. Using duplicate IDs can lead to undefined behavior,
+    /// message routing failures, and other system inconsistencies.
+    ///
+    /// The caller is responsible for:
+    /// - Ensuring the `ActorId` is globally unique
+    /// - Not conflicting with auto-generated IDs from `ActorId::generate()`
+    /// - Understanding the implications of manual ID management
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use kameo::{Actor, actor::ActorId, mailbox};
+    ///
+    /// #[derive(Actor)]
+    /// struct MyActor;
+    ///
+    /// # tokio_test::block_on(async {
+    /// // SAFETY: We ensure ID 1000 is unique and doesn't conflict with auto-generated IDs
+    /// let prepared_actor = unsafe {
+    ///     MyActor::prepare_with_id_and_mailbox(ActorId::new(1000), mailbox::unbounded())
+    /// };
+    /// let actor_ref = prepared_actor.spawn(MyActor);
+    /// # })
+    /// ```
+    unsafe fn prepare_with_id_and_mailbox(
+        id: ActorId,
+        (mailbox_tx, mailbox_rx): (MailboxSender<Self>, MailboxReceiver<Self>),
+    ) -> PreparedActor<Self> {
+        PreparedActor::new_with_id(id, (mailbox_tx, mailbox_rx))
+    }
 }

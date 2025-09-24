@@ -82,6 +82,37 @@ where
         }
     }
 
+    /// Creates a new `ActorRef` with a specific `ActorId`.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because the caller must ensure that the provided `ActorId`
+    /// is unique within the actor system. Using duplicate IDs can lead to undefined behavior,
+    /// message routing failures, and other system inconsistencies.
+    ///
+    /// The caller is responsible for:
+    /// - Ensuring the `ActorId` is globally unique
+    /// - Not conflicting with auto-generated IDs from `ActorId::generate()`
+    /// - Understanding the implications of manual ID management
+    #[inline]
+    pub unsafe fn new_with_id(
+        id: ActorId,
+        mailbox: MailboxSender<A>,
+        abort_handle: AbortHandle,
+        links: Links,
+        startup_result: Arc<SetOnce<Result<(), PanicError>>>,
+        shutdown_result: Arc<SetOnce<Result<(), PanicError>>>,
+    ) -> Self {
+        ActorRef {
+            id,
+            mailbox_sender: mailbox,
+            abort_handle,
+            links,
+            startup_result,
+            shutdown_result,
+        }
+    }
+
     /// Returns the unique identifier of the actor.
     #[inline]
     pub fn id(&self) -> ActorId {
